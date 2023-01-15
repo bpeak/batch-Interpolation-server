@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Document</title>
+    <style>
+        canvas {
+            border: 1px solid gray
+        }
+    </style>
+</head>
+<body>
+<canvas height="800" id="myCanvas" width="800"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/uuid@latest/dist/umd/uuid.min.js"></script>
+<script>
+    var canvas = document.getElementById("myCanvas")
+    var ctx = canvas.getContext("2d")
+
+    // CONSTANT
+    const SPEED = 10
+    const RADIUS = 10
+    const KEY_LEFT = "KEY_LEFT"
+    const KEY_RIGHT = "KEY_RIGHT"
+    const KEY_UP = "KEY_UP"
+    const KEY_DOWN = "KEY_DOWN"
+    const NETWORL_LATENCY = 350
+
+    let downKey = null
+    const myId = uuid.v4()
+    const players = {
+        [myId]: {
+            id: myId,
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            ts: Date.now(),
+            sended: false,
+        }
+    }
+
+    const socket = new WebSocket(`ws://localhost:8080/ws?id=${myId}`)
+    socket.onopen = function () {
+        console.log('onopen')
+    }
+
+    socket.onmessage = function (event) {
+        const data = JSON.parse(event.data)
+        console.log(data)
+
+        const moves = data.moves
+        const leftUserIds = data.leftUserIds
+
+        moves.forEach(move => {
+            if (move.id == myId) return
+            const p = players[move.id]
+            players[move.id] = p == null ? ({
+                id: move.id,
+                prev_sx: move.x,
+                prev_sy: move.y,
+                curr_sx: move.x,
+                curr_sy: move.y,
+                itpl_x: move.x,
+                itpl_y: move.y,
+                ts: move.ts,
+                interpolated: true,
+            }) : ({
+                ...p,
+                prev_sx: p.curr_sx,
+                prev_sy: p.curr_sy,
+                curr_sx: move.x,
+                curr_sy: move.y,
+                ts: move.ts,
+                interpolated: false,
+            })
+        });
+
+        leftUserIds.forEach(leftUserId => {
+            delete players[leftUserId]
+        })
+    }
+
+    socket.onclose = function () {
+        console.log('onclose')
+    }
+
+    function update() {
+        // me
+        switch (downKey) {
+            case null:
+                break
+            case KEY_LEFT:
+                players[myId].x -= SPEED
+                players[myId].sended = false
+                players[myId].ts = Date.now()
+                break
+            case KEY_UP:
+                players[myId].y -= SPEED
+                players[myId].sended = false
+                players[myId].ts = Date.now()
+                break
+            case KEY_RIGHT:
+                players[myId].x += SPEED
+                players[myId].sended = false
+                players[myId].ts = Date.now()
+                break
+            case KEY_DOWN:
+                players[myId].y += SPEED
+                players[myId].sended = false
+                players[myId].ts = Date.now()
+                break
+        }
+        // others
+        for (k of Object.keys(players)) {
+            if (k == myId) continue
+            const p = players[k]
+            if (!p.interpolated) {
+                p.interpolated = true
+
+                const elapsedTime = Date.now() - p.ts + NETWORL_LATENCY
+                let interpol = elapsedTime / (1000 / 16);
+                p.itpl_x = p.prev_sx + (p.curr_sx - p.prev_sx) * interpol
+                p.itpl_y = p.prev_sy + (p.curr_sy - p.prev_sy) * interpol
+
+            } else {
+                const elapsedTime = Date.now() - p.ts
+                if (elapsedTime > 10) {
+                    p.itpl_x = p.curr_sx
+                    p.itpl_y = p.curr_sy
+                }
+            }
+        }
+    }
+
+    function send() {
+        const me = players[myId]
+        if (!me.sended) {
+            me.sended = true
+            socket.send(JSON.stringify({
+                id: me.id,
+                x: me.x,
+                y: me.y,
+                ts: me.ts,
+            }))
+        }
+    }
+
+    function draw() {
+        const me = players[myId]
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        // me
+        ctx.beginPath()
+        ctx.arc(me.x, me.y, RADIUS, 0, Math.PI * 2)
+        ctx.fillStyle = "blue"
+        ctx.fill()
+        ctx.closePath()
+        // others
+        for (v of Object.keys(players)) {
+            if (v == myId) continue
+            const p = players[v]
+            ctx.beginPath()
+            ctx.arc(p.itpl_x, p.itpl_y, RADIUS + 5, 0, Math.PI * 2)
+            ctx.fillStyle = "gray"
+            ctx.fill()
+            ctx.closePath()
+
+            ctx.beginPath()
+            ctx.arc(p.curr_sx, p.curr_sy, RADIUS, 0, Math.PI * 2)
+            ctx.fillStyle = "black"
+            ctx.stroke()
+            ctx.closePath()
+        }
+    }
+
+    document.addEventListener("keydown", function (event) {
+        switch (event.keyCode) {
+            case 37:
+                downKey = KEY_LEFT
+                break
+            case 38:
+                downKey = KEY_UP
+                break
+            case 39:
+                downKey = KEY_RIGHT
+                break
+            case 40:
+                downKey = KEY_DOWN
+                break
+        }
+    })
+
+    document.addEventListener("keyup", function (event) {
+        if (
+            event.keyCode == 37 ||
+            event.keyCode == 38 ||
+            event.keyCode == 39 ||
+            event.keyCode == 40
+        ) {
+            downKey = null
+        }
+    })
+
+    setInterval(function () {
+        draw()
+        send()
+        update()
+    }, 16)
+</script>
+</body>
+</html>
